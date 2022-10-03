@@ -1,0 +1,17 @@
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+  {% for dir in filebeat_log_dirs %}
+    - {{ dir }}
+  {% endfor %}
+
+output.redis:
+  enabled: true
+
+  codec.json:
+    pretty: false
+
+  hosts: ["{{ filebeat_redis_host }}"]
+
+

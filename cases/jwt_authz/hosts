@@ -1,0 +1,28 @@
+[emqx]
+192.168.5.11 ansible_host=emqx 
+
+[emqx:vars]
+filebeat_log_dirs=["/var/log/emqx/*.log", "/var/log/emqx/emqx.log.?", "/var/log/emqx/erlang.log.?"]
+
+
+[jwt_server]
+192.168.5.12 ansible_host=jwt-server
+
+[test_host]
+192.168.5.13 ansible_host=test-host
+
+
+[beam:children]
+jwt_server
+test_host
+
+
+[log_export:children]
+emqx
+
+[log_export:vars]
+filebeat_redis_host=test-host:6379
+
+
+[all:vars]
+ansible_connection=local

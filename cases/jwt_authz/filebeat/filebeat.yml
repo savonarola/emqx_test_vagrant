@@ -1,0 +1,11 @@
+- name: Install Filebeat
+  apt:
+    deb: https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.4.2-amd64.deb
+- name: Setup Filebeat config
+  template:
+    src: filebeat.yml.j2
+    dest: /etc/filebeat/filebeat.yml
+- name: Start Filebeat
+  systemd:
+    name: filebeat
+    state: restarted

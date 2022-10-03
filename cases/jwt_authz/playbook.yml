@@ -1,0 +1,215 @@
+####################################################################################################
+# Discovery
+####################################################################################################
+
+- name: Setup host discovery
+  become: yes
+  hosts: all
+  tasks:
+  - name: Setup hosts
+    lineinfile:
+      dest: "/etc/hosts"
+      search_string: "{{ item }}"
+      line: "{{ item }}\t{{ hostvars[item]['ansible_host'] }}"
+    with_items: "{{ hostvars }}"
+
+####################################################################################################
+# BEAM Servers
+####################################################################################################
+
+- name: Setup BEAM infrastructure
+  become: yes
+  hosts: beam
+  gather_facts: no
+  tasks:
+  - name: Install ESL repos
+    apt:
+      deb: https://packages.erlang-solutions.com/erlang-solutions_2.0_all.deb
+  - name: Install packages
+    apt:
+      pkg:
+      - esl-erlang
+      - elixir
+      update_cache: yes
+
+####################################################################################################
+# Filebeat
+####################################################################################################
+
+- name: Setup Filebeat
+  become: yes
+  hosts: log_export
+  gather_facts: no
+  tasks:
+  - name: Setup Filebeat
+    include_tasks: filebeat/filebeat.yml
+
+####################################################################################################
+# EMQX
+####################################################################################################
+
+- name: Install EMQX
+  become: yes
+  hosts: emqx
+  gather_facts: no
+  tasks:
+  - name: Install EMQX package
+    apt:
+      deb: https://github.com/emqx/emqx/releases/download/v4.4.9/emqx-4.4.9-otp24.1.5-3-ubuntu20.04-amd64.deb
+
+  - name: Setup emqx.conf
+    lineinfile:
+      dest: "/etc/emqx/emqx.conf"
+      search_string: "{{ item.setting }} ="
+      line: "{{ item.setting }} = {{ item.value }}"
+    with_items:
+      - { setting: 'allow_anonymous', value: "false" }
+      - { setting: 'acl_nomatch', value: "deny" }
+      - { setting: 'log.level', value: "debug" }
+
+  - name: Setup acl.conf
+    lineinfile:
+      dest: "/etc/emqx/acl.conf"
+      regexp: '^\{\w+, all\}'
+      line: "{deny, all}."
+
+  - name: Setup loaded_plugins
+    lineinfile:
+      dest: "/var/lib/emqx/loaded_plugins"
+      line: "{emqx_auth_jwt, true}."
+
+  - name: Setup emqx_auth_jwt options
+    lineinfile:
+      dest: "/etc/emqx/plugins/emqx_auth_jwt.conf"
+      search_string: "{{ item.setting }} ="
+      line: "{{ item.setting }} = {{ item.value }}"
+    with_items:
+      - { setting: 'auth.jwt.jwks', value: "http://jwt-server:4001/keys.json" }
+      - { setting: 'auth.jwt.jwks.refresh_interval', value: "10s" }
+      - { setting: 'auth.jwt.from', value: "password" }
+      - { setting: 'auth.jwt.verify_claims', value: "on" }
+      - { setting: 'auth.jwt.verify_claims.username', value: "%u" }
+      - { setting: 'auth.jwt.acl_claim_name', value: "acl" }
+
+  - name: Setup emqx_auth_jwt options
+    lineinfile:
+      dest: "/etc/emqx/plugins/emqx_auth_jwt.conf"
+      search_string: "{{ item }} ="
+      state: absent
+    with_items:
+      - auth.jwt.secret
+
+  - name: Start EMQX
+    systemd:
+      name: emqx
+      state: restarted
+    
+
+####################################################################################################
+# JWT Server
+####################################################################################################
+
+- name: Start JWT server
+  become: no
+  hosts: jwt_server
+  gather_facts: no
+  vars:
+    project_dir: "/home/vagrant/jwt_server"
+  tasks:
+
+  - name: Clone JWT Server project
+    git:
+      repo: https://github.com/savonarola/jwt_server.git
+      dest: "{{ project_dir }}"
+      update: yes
+
+  - name: Install hex
+    shell:
+      cmd: mix local.hex --force
+
+  - name: Install rebar
+    shell:
+      cmd: mix local.rebar --force
+
+  - name: Clean jwt_server
+    shell:
+      chdir: "{{ project_dir }}"
+      cmd: mix clean --deps
+
+  - name: Get jwt_server deps
+    shell:
+      chdir: "{{ project_dir }}"
+      cmd: mix deps.get
+
+  - name: Build jwt_server
+    shell:
+      chdir: "{{ project_dir }}"
+      cmd: mix release
+      
+  - name: Run jwt_server
+    shell:
+      chdir: "{{ project_dir }}"
+      cmd: _build/dev/rel/main/bin/main daemon
+
+
+####################################################################################################
+# Test Host
+####################################################################################################
+
+- name: Setup test host
+  become: yes
+  hosts: test_host
+  gather_facts: no
+  tasks:
+  - name: Install packages
+    apt:
+      pkg:
+      - redis
+  - name: Setup Redis
+    lineinfile:
+      dest: /etc/redis/redis.conf
+      regexp: '^bind '
+      line: "bind 0.0.0.0"
+  - name: Start Redis
+    systemd:
+      name: redis
+      state: restarted
+    
+- name: Setup test suite
+  become: no
+  hosts: test_host
+  gather_facts: no
+  vars:
+    project_dir: "/home/vagrant/test"
+  tasks:
+
+  - name: Clean test project
+    file:
+      dest: "{{ project_dir }}"
+      state: absent
+
+  - name: Clone project
+    copy:
+      src: /vagrant/test
+      dest: /home/vagrant
+      remote_src: yes
+
+  - name: Install hex
+    shell:
+      cmd: mix local.hex --force
+
+  - name: Install rebar
+    shell:
+      cmd: mix local.rebar --force
+
+  - name: Clean
+    shell:
+      chdir: "{{ project_dir }}"
+      cmd: mix clean --deps
+
+  - name: Get deps
+    shell:
+      chdir: "{{ project_dir }}"
+      cmd: mix deps.get
+
+
